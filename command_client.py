@@ -7,8 +7,6 @@ from tempfile import gettempdir
 from typing import Any, List
 from uuid import uuid4
 
-from talon import Context, Module, actions, speech_system
-
 # How old a request file needs to be before we declare it stale and are willing
 # to remove it
 STALE_TIMEOUT_MS = 60_000
@@ -24,36 +22,11 @@ MINIMUM_SLEEP_TIME_SECONDS = 0.0005
 # current phrase 
 did_emit_pre_phrase_signal = False
 
-mod = Module()
-
-global_ctx = Context()
-ctx = Context()
-mac_ctx = Context()
-linux_ctx = Context()
-
-ctx.matches = r"""
-app: vscode
-"""
-mac_ctx.matches = r"""
-os: mac
-app: vscode
-"""
-linux_ctx.matches = r"""
-os: linux
-app: vscode
-"""
-
 
 class NotSet:
     def __repr__(self):
         return "<argument not set>"
 
-
-def run_vscode_command_by_command_palette(command_id: str):
-    """Execute command via command palette. Preserves the clipboard."""
-    actions.user.command_palette()
-    actions.user.paste(command_id)
-    actions.key("enter")
 
 
 def write_json_exclusive(path: Path, body: Any):
@@ -150,11 +123,7 @@ def run_vscode_command(
     communication_dir_path = get_communication_dir_path()
 
     if not communication_dir_path.exists():
-        if args or return_command_output:
-            raise Exception("Must use command-server extension for advanced commands")
-        print("Communication dir not found; falling back to command palette")
-        run_vscode_command_by_command_palette(command_id)
-        return
+        raise Exception("Must use command-server extension for advanced commands")
 
     request_path = communication_dir_path / "request.json"
     response_path = communication_dir_path / "response.json"
@@ -184,7 +153,10 @@ def run_vscode_command(
     # request file.  Because only the active VSCode instance will accept
     # keypresses, we can be sure that the active VSCode instance will be the
     # one to execute the command.
-    actions.user.trigger_command_server_command_execution()
+    # TODO: Issue keypress via vocola.  Keypress depends on platform
+    # Windows: ctrl-shift-f17
+    # Mac: cmd-shift-f17
+    # Linux: ctrl-shift-alt-p
 
     try:
         decoded_contents = read_json_with_timeout(response_path)
@@ -203,7 +175,7 @@ def run_vscode_command(
     if decoded_contents["error"] is not None:
         raise Exception(decoded_contents["error"])
 
-    actions.sleep("25ms")
+    time.sleep(0.025)
 
     return decoded_contents["returnValue"]
 
@@ -248,7 +220,7 @@ def robust_unlink(path: Path):
             raise e
 
 
-def read_json_with_timeout(path: str) -> Any:
+def read_json_with_timeout(path: Path) -> Any:
     """Repeatedly tries to read a json object from the given path, waiting
     until there is a trailing new line indicating that the write is complete
 
@@ -273,7 +245,7 @@ def read_json_with_timeout(path: str) -> Any:
             # If not found, keep waiting
             pass
 
-        actions.sleep(sleep_time)
+        time.sleep(sleep_time)
 
         time_left = timeout_time - time.perf_counter()
 
@@ -285,159 +257,3 @@ def read_json_with_timeout(path: str) -> Any:
         sleep_time = max(min(sleep_time * 2, time_left), MINIMUM_SLEEP_TIME_SECONDS)
 
     return json.loads(raw_text)
-
-
-@mod.action_class
-class Actions:
-    def vscode(command_id: str):
-        """Execute command via vscode command server, if available, or fallback
-        to command palette."""
-        run_vscode_command(command_id)
-
-    def vscode_and_wait(command_id: str):
-        """Execute command via vscode command server, if available, and wait
-        for command to finish.  If command server not available, uses command
-        palette and doesn't guarantee that it will wait for command to
-        finish."""
-        run_vscode_command(command_id, wait_for_finish=True)
-
-    def vscode_with_plugin(
-        command_id: str,
-        arg1: Any = NotSet,
-        arg2: Any = NotSet,
-        arg3: Any = NotSet,
-        arg4: Any = NotSet,
-        arg5: Any = NotSet,
-    ):
-        """Execute command via vscode command server."""
-        run_vscode_command(
-            command_id,
-            arg1,
-            arg2,
-            arg3,
-            arg4,
-            arg5,
-        )
-
-    def vscode_with_plugin_and_wait(
-        command_id: str,
-        arg1: Any = NotSet,
-        arg2: Any = NotSet,
-        arg3: Any = NotSet,
-        arg4: Any = NotSet,
-        arg5: Any = NotSet,
-    ):
-        """Execute command via vscode command server and wait for command to finish."""
-        run_vscode_command(
-            command_id,
-            arg1,
-            arg2,
-            arg3,
-            arg4,
-            arg5,
-            wait_for_finish=True,
-        )
-
-    def vscode_get(
-        command_id: str,
-        arg1: Any = NotSet,
-        arg2: Any = NotSet,
-        arg3: Any = NotSet,
-        arg4: Any = NotSet,
-        arg5: Any = NotSet,
-    ) -> Any:
-        """Execute command via vscode command server and return command output."""
-        return run_vscode_command(
-            command_id,
-            arg1,
-            arg2,
-            arg3,
-            arg4,
-            arg5,
-            return_command_output=True,
-        )
-
-    def trigger_command_server_command_execution():
-        """Issue keystroke to trigger command server to execute command that
-        was written to the file.  For internal use only"""
-        actions.key("ctrl-shift-f17")
-
-    def emit_pre_phrase_signal():
-        """Touches a file to indicate that a phrase is about to begin execution"""
-        pass
-
-    def did_emit_pre_phrase_signal() -> bool:
-        """Indicates whether the pre-phrase signal was emitted at the start of this phrase"""
-        return did_emit_pre_phrase_signal
-
-
-@mac_ctx.action_class("user")
-class MacUserActions:
-    def trigger_command_server_command_execution():
-        actions.key("cmd-shift-f17")
-
-
-@linux_ctx.action_class("user")
-class LinuxUserActions:
-    def trigger_command_server_command_execution():
-        actions.key("ctrl-shift-alt-p")
-
-
-@global_ctx.action_class("user")
-class GlobalUserActions:
-    def emit_pre_phrase_signal():
-        # NB: We explicitly define a noop version of this action in the global
-        # context here so that it doesn't do anything before phrases if you're not
-        # in vscode.
-        pass
-
-
-@ctx.action_class("user")
-class UserActions:
-    def emit_pre_phrase_signal():
-        get_signal_path("prePhrase").touch()
-
-
-class MissingCommunicationDir(Exception):
-    pass
-
-
-def get_signal_path(name: str) -> Path:
-    """
-    Get the path to a signal in the signal subdirectory.
-
-    Args:
-        name (str): The name of the signal
-
-    Returns:
-        Path: The signal path
-    """
-    communication_dir_path = get_communication_dir_path()
-
-    if not communication_dir_path.exists():
-        raise MissingCommunicationDir()
-
-    signal_dir = communication_dir_path / "signals"
-    signal_dir.mkdir(parents=True, exist_ok=True)
-
-    return signal_dir / name
-
-
-def pre_phrase(_: Any):
-    try:
-        global did_emit_pre_phrase_signal
-
-        actions.user.emit_pre_phrase_signal()
-
-        did_emit_pre_phrase_signal = True
-    except MissingCommunicationDir:
-        pass
-
-
-def post_phrase(_: Any):
-    global did_emit_pre_phrase_signal
-    did_emit_pre_phrase_signal = False
-
-
-speech_system.register("pre:phrase", pre_phrase)
-speech_system.register("post:phrase", post_phrase)
